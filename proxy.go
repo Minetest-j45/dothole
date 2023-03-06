@@ -1,15 +1,39 @@
 package main
 
 import (
+	"crypto/tls"
 	"fmt"
+	"io/ioutil"
 	"net"
 )
 
 var upstreamIP net.IP = net.ParseIP("208.67.220.220")
-var upstreamPort int = 53 //853 for tls
+var upstreamPort int = 853
+var localPort int = 5353
+
+//var upstreamPort int = 53 //853 for tls
 
 func handleConnection(localConn net.Conn, upstream *net.TCPAddr) {
-	upstreamConn, err := net.DialTCP("tcp", nil, upstream)
+	certPEMBlock, err := ioutil.ReadFile("cert.pem")
+	keyPEMBlock, err := ioutil.ReadFile("key.pem")
+	cert, err := tls.X509KeyPair(certPEMBlock, keyPEMBlock)
+
+	if err != nil {
+		panic(err)
+	}
+
+	tlsConf := &tls.Config{
+		Certificates:       []tls.Certificate{cert},
+		InsecureSkipVerify: true,
+		MinVersion:         tls.VersionTLS13,
+		ClientAuth:         tls.RequireAndVerifyClientCert,
+	}
+
+	upstreamDialer := &tls.Dialer{
+		Config: tlsConf,
+	}
+
+	upstreamConn, err := upstreamDialer.Dial("tcp", upstreamIP.String()+":"+fmt.Sprint(upstreamPort))
 	if err != nil {
 		panic(err)
 	}
@@ -21,7 +45,7 @@ func handleConnection(localConn net.Conn, upstream *net.TCPAddr) {
 			if err != nil {
 				return
 			}
-			fmt.Println(buf[:n])
+			fmt.Println(string(buf[:n]))
 			_, err = upstreamConn.Write(buf[:n])
 			if err != nil {
 				return
@@ -35,7 +59,7 @@ func handleConnection(localConn net.Conn, upstream *net.TCPAddr) {
 		if err != nil {
 			return
 		}
-		fmt.Println(buf[:n])
+		fmt.Println(string(buf[:n]))
 		_, err = localConn.Write(buf[:n])
 		if err != nil {
 			return
@@ -45,7 +69,7 @@ func handleConnection(localConn net.Conn, upstream *net.TCPAddr) {
 
 func main() {
 	upstream := &net.TCPAddr{IP: upstreamIP, Port: upstreamPort}
-	local, err := net.Listen("tcp", ":53")
+	local, err := net.Listen("tcp", ":"+fmt.Sprint(localPort))
 	if err != nil {
 		panic(err)
 	}
