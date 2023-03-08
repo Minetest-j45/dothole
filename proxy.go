@@ -5,30 +5,22 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net"
+	"strings"
+
+	"github.com/miekg/dns"
 )
 
 var upstreamIP net.IP = net.ParseIP("208.67.220.220")
 var upstreamPort int = 853
 var localPort int = 5353
 
-//var upstreamPort int = 53 //853 for tls
+var tlsConf = &tls.Config{
+	InsecureSkipVerify: true,
+	MinVersion:         tls.VersionTLS13,
+	ClientAuth:         tls.RequireAndVerifyClientCert,
+}
 
 func handleConnection(localConn net.Conn, upstream *net.TCPAddr) {
-	certPEMBlock, err := ioutil.ReadFile("cert.pem")
-	keyPEMBlock, err := ioutil.ReadFile("key.pem")
-	cert, err := tls.X509KeyPair(certPEMBlock, keyPEMBlock)
-
-	if err != nil {
-		panic(err)
-	}
-
-	tlsConf := &tls.Config{
-		Certificates:       []tls.Certificate{cert},
-		InsecureSkipVerify: true,
-		MinVersion:         tls.VersionTLS13,
-		ClientAuth:         tls.RequireAndVerifyClientCert,
-	}
-
 	upstreamDialer := &tls.Dialer{
 		Config: tlsConf,
 	}
@@ -45,7 +37,10 @@ func handleConnection(localConn net.Conn, upstream *net.TCPAddr) {
 			if err != nil {
 				return
 			}
-			fmt.Println(string(buf[:n]))
+
+			name, _, _ := dns.UnpackDomainName(buf[:n], 14)
+			fmt.Println(strings.TrimRight(name, "."))
+
 			_, err = upstreamConn.Write(buf[:n])
 			if err != nil {
 				return
@@ -59,7 +54,7 @@ func handleConnection(localConn net.Conn, upstream *net.TCPAddr) {
 		if err != nil {
 			return
 		}
-		fmt.Println(string(buf[:n]))
+		//fmt.Println(buf[:n])
 		_, err = localConn.Write(buf[:n])
 		if err != nil {
 			return
@@ -68,7 +63,16 @@ func handleConnection(localConn net.Conn, upstream *net.TCPAddr) {
 }
 
 func main() {
+	certPEMBlock, err := ioutil.ReadFile("cert.pem")
+	keyPEMBlock, err := ioutil.ReadFile("key.pem")
+	cert, err := tls.X509KeyPair(certPEMBlock, keyPEMBlock)
+	if err != nil {
+		panic(err)
+	}
+	tlsConf.Certificates = []tls.Certificate{cert}
+
 	upstream := &net.TCPAddr{IP: upstreamIP, Port: upstreamPort}
+
 	local, err := net.Listen("tcp", ":"+fmt.Sprint(localPort))
 	if err != nil {
 		panic(err)
