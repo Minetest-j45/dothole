@@ -2,27 +2,26 @@ package main
 
 import (
 	"crypto/tls"
-	"fmt"
 	"io/ioutil"
+	"log"
 	"net"
-	"strings"
 
 	"github.com/miekg/dns"
 )
 
 var upstreamIP net.IP = net.ParseIP("208.67.220.220")
-var upstreamPort int = 853
+var upstreamPort string = "853"
 
-var localPort int = 5353 //853 for tls
+var localPort string = "5353" //853 for tls
 
 func handleConnection(localConn net.Conn, tlsConf *tls.Config) {
 	upstreamDialer := &tls.Dialer{
 		Config: tlsConf,
 	}
 
-	upstreamConn, err := upstreamDialer.Dial("tcp", upstreamIP.String()+":"+fmt.Sprint(upstreamPort))
+	upstreamConn, err := upstreamDialer.Dial("tcp", upstreamIP.String()+":"+upstreamPort)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	go func() {
@@ -33,8 +32,11 @@ func handleConnection(localConn net.Conn, tlsConf *tls.Config) {
 				return
 			}
 
-			name, _, _ := dns.UnpackDomainName(buf[:n], 14)
-			fmt.Println(strings.TrimRight(name, "."))
+			name, _, err := dns.UnpackDomainName(buf[:n], 14)
+			if err != nil {
+				log.Fatal(err, name, buf[:n])
+			}
+			log.Println(name)
 
 			_, err = upstreamConn.Write(buf[:n])
 			if err != nil {
@@ -49,7 +51,7 @@ func handleConnection(localConn net.Conn, tlsConf *tls.Config) {
 		if err != nil {
 			return
 		}
-		//fmt.Println(buf[:n])
+
 		_, err = localConn.Write(buf[:n])
 		if err != nil {
 			return
@@ -67,9 +69,9 @@ func main() {
 
 	var tlsConf = &tls.Config{Certificates: []tls.Certificate{cert}}
 
-	local, err := tls.Listen("tcp", ":"+fmt.Sprint(localPort), tlsConf)
+	local, err := tls.Listen("tcp", ":"+localPort, tlsConf)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	for {
