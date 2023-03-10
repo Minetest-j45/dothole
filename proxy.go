@@ -64,7 +64,7 @@ func main() {
 	keyPEMBlock, err := ioutil.ReadFile("key.pem")
 	cert, err := tls.X509KeyPair(certPEMBlock, keyPEMBlock)
 	if err != nil {
-		log.Println(err)
+		log.Fatal(err)
 	}
 
 	var tlsConf = &tls.Config{Certificates: []tls.Certificate{cert}}
@@ -77,7 +77,7 @@ func main() {
 	for {
 		localConn, err := local.Accept()
 		if err != nil {
-			log.Printlns(err)
+			log.Fatal(err)
 		}
 		go handleConnection(localConn, tlsConf)
 	}
