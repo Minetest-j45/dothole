@@ -12,15 +12,10 @@ import (
 
 var upstreamIP net.IP = net.ParseIP("208.67.220.220")
 var upstreamPort int = 853
-var localPort int = 5353
 
-var tlsConf = &tls.Config{
-	InsecureSkipVerify: true,
-	MinVersion:         tls.VersionTLS13,
-	ClientAuth:         tls.RequireAndVerifyClientCert,
-}
+var localPort int = 5353 //853 for tls
 
-func handleConnection(localConn net.Conn, upstream *net.TCPAddr) {
+func handleConnection(localConn net.Conn, tlsConf *tls.Config) {
 	upstreamDialer := &tls.Dialer{
 		Config: tlsConf,
 	}
@@ -69,11 +64,10 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	tlsConf.Certificates = []tls.Certificate{cert}
 
-	upstream := &net.TCPAddr{IP: upstreamIP, Port: upstreamPort}
+	var tlsConf = &tls.Config{Certificates: []tls.Certificate{cert}}
 
-	local, err := net.Listen("tcp", ":"+fmt.Sprint(localPort))
+	local, err := tls.Listen("tcp", ":"+fmt.Sprint(localPort), tlsConf)
 	if err != nil {
 		panic(err)
 	}
@@ -83,6 +77,6 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		go handleConnection(localConn, upstream)
+		go handleConnection(localConn, tlsConf)
 	}
 }
