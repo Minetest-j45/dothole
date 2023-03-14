@@ -2,9 +2,13 @@ package main
 
 import (
 	"crypto/tls"
-	"io/ioutil"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
 	"log"
 	"net"
+	"os"
 
 	"github.com/miekg/dns"
 )
@@ -13,6 +17,32 @@ var upstreamIP net.IP = net.ParseIP("208.67.220.220")
 var upstreamPort string = "853"
 
 var localPort string = "5353" //853 for tls
+
+func readPacket(conn net.Conn) ([]byte, []byte, error) {
+	buf := make([]byte, 2)
+	_, err := conn.Read(buf)
+	if err != nil {
+		return nil, nil, errors.New("failed to read packet length")
+	}
+
+	len := binary.BigEndian.Uint16(buf)
+	if len > dns.MaxMsgSize {
+		return nil, nil, errors.New("packet too long" + fmt.Sprint(len))
+	}
+
+	raw := make([]byte, len+2)
+	copy(raw, buf)
+
+	buf = make([]byte, len)
+	_, err = io.ReadFull(conn, buf)
+	if err != nil {
+		return nil, nil, errors.New("failed to read packet")
+	}
+
+	copy(raw[2:], buf)
+
+	return raw, buf, nil
+}
 
 func handleConnection(localConn net.Conn, tlsConf *tls.Config) {
 	upstreamDialer := &tls.Dialer{
@@ -25,34 +55,41 @@ func handleConnection(localConn net.Conn, tlsConf *tls.Config) {
 	}
 
 	go func() {
-		buf := make([]byte, 4096)
 		for {
-			n, err := localConn.Read(buf)
+			raw, n, err := readPacket(localConn)
 			if err != nil {
 				return
 			}
 
-			name, _, err := dns.UnpackDomainName(buf[:n], 14)
+			m := new(dns.Msg)
+			err = m.Unpack(n)
 			if err != nil {
-				log.Fatal(err, name, buf[:n])
+				log.Fatal(err)
 			}
-			log.Println(name)
+			log.Println(m.Question[0])
 
-			_, err = upstreamConn.Write(buf[:n])
+			_, err = upstreamConn.Write(raw)
 			if err != nil {
 				return
 			}
 		}
 	}()
 
-	buf := make([]byte, 4096)
 	for {
-		n, err := upstreamConn.Read(buf)
+		raw, n, err := readPacket(upstreamConn)
 		if err != nil {
 			return
 		}
 
-		_, err = localConn.Write(buf[:n])
+		m := new(dns.Msg)
+		err = m.Unpack(n)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Println(m.Question[0])
+		log.Println(m.Answer[0])
+
+		_, err = localConn.Write(raw)
 		if err != nil {
 			return
 		}
@@ -60,8 +97,8 @@ func handleConnection(localConn net.Conn, tlsConf *tls.Config) {
 }
 
 func main() {
-	certPEMBlock, err := ioutil.ReadFile("cert.pem")
-	keyPEMBlock, err := ioutil.ReadFile("key.pem")
+	certPEMBlock, err := os.ReadFile("cert.pem")
+	keyPEMBlock, err := os.ReadFile("key.pem")
 	cert, err := tls.X509KeyPair(certPEMBlock, keyPEMBlock)
 	if err != nil {
 		log.Fatal(err)
