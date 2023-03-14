@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/miekg/dns"
@@ -25,7 +26,12 @@ type cacheEntry struct {
 	t time.Time
 }
 
-var cacheValidTime time.Duration = 300 * time.Second
+type cache struct {
+	sync.RWMutex
+	entries []cacheEntry
+}
+
+var cacheValidTime time.Duration = 10 * time.Second
 
 func readPacket(conn net.Conn) ([]byte, []byte, error) {
 	buf := make([]byte, 2)
@@ -53,7 +59,7 @@ func readPacket(conn net.Conn) ([]byte, []byte, error) {
 	return raw, buf, nil
 }
 
-func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *[]cacheEntry) {
+func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *cache) {
 	upstreamDialer := &tls.Dialer{
 		Config: tlsConf,
 	}
@@ -77,7 +83,8 @@ func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *[]cacheEntry) 
 			}
 
 			//check cache for the question
-			for i, entry := range *c {
+			c.Lock()
+			for i, entry := range c.entries {
 				if entry.q == m.Question[0] {
 
 					//check if cache entry is still valid
@@ -103,10 +110,12 @@ func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *[]cacheEntry) 
 						continue
 					} else {
 						//delete entry if it is not valid anymore
-						*c = append((*c)[:i], (*c)[i+1:]...)
+						c.entries = append((c.entries)[:i], (c.entries)[i+1:]...)
+
 					}
 				}
 			}
+			c.Unlock()
 
 			_, err = upstreamConn.Write(raw)
 			if err != nil {
@@ -127,14 +136,16 @@ func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *[]cacheEntry) 
 			log.Fatal(err)
 		}
 
-		for i, entry := range *c {
+		c.Lock()
+		for i, entry := range c.entries {
 			if entry.q == m.Question[0] {
-				*c = append((*c)[:i], (*c)[i+1:]...) //delete entry if it already exists
+				c.entries = append((c.entries)[:i], (c.entries)[i+1:]...) //delete entry if it already exists
 			}
 		}
 
 		//add to cache
-		*c = append(*c, cacheEntry{m.Question[0], m.Answer[0], time.Now()})
+		c.entries = append(c.entries, cacheEntry{m.Question[0], m.Answer[0], time.Now()})
+		c.Unlock()
 
 		_, err = localConn.Write(raw)
 		if err != nil {
@@ -144,7 +155,7 @@ func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *[]cacheEntry) 
 }
 
 func main() {
-	var c []cacheEntry
+	var c cache
 
 	certPEMBlock, err := os.ReadFile("cert.pem")
 	if err != nil {
@@ -171,11 +182,15 @@ func main() {
 	go func() {
 		//clear outdated cache entries
 		for {
-			for i, entry := range c {
+			c.Lock()
+			for i, entry := range c.entries {
 				if time.Since(entry.t) > cacheValidTime {
-					c = append(c[:i], c[i+1:]...)
+					log.Println("deleting cache entry", entry)
+					c.entries = append(c.entries[:i], c.entries[i+1:]...)
 				}
 			}
+			c.Unlock()
+
 			time.Sleep(cacheValidTime / 2)
 		}
 	}()
