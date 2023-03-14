@@ -1,4 +1,4 @@
-module github.com/Minetest-j45/DoT-hole
+module github.com/Minetest-j45/dothole
 
 go 1.20
 
