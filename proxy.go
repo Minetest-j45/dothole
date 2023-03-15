@@ -274,6 +274,6 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		go handleConnection(localConn, tlsConf, &c, blocklistBool, blocklist)
+		go handleConnection(localConn, tlsConf, &c, *blocklistBool, blocklist)
 	}
 }

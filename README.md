@@ -5,11 +5,11 @@ A DNS over TLS recursive name server, inspired by [Pi-hole](https://pi-hole.net/
 ## Features:
 1. DNS over TLS for both the client and the upstream server
 2. caching entries
+3. blocklists
 
 ## Todo:
 injecting entries
 
-filtering entries (a block list, like pihole has)
 
 ## Testing:
 Ensure you have a public private keypair saved to cert.pem and key.pem
