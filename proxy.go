@@ -9,7 +9,9 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,6 +33,32 @@ type cache struct {
 }
 
 var cacheValidTime time.Duration = 10 * time.Second //todo: change to around 300 seconds
+
+func loadList() map[string]string {
+	resp, err := http.Get("https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts")
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	raw, _ := io.ReadAll(resp.Body)
+
+	rawlines := strings.Split(string(raw), "\n")
+
+	blockList := make(map[string]string) // map of ips indexable by domain name
+	for _, line := range rawlines {
+		parts := strings.Split(line, " ")
+		if strings.HasPrefix(line, "#") || strings.TrimSpace(line) == "" || len(parts) < 2 {
+			continue
+		}
+
+		// add to blocklist
+		blockList[parts[1]+"."] = parts[0]
+
+	}
+
+	return blockList
+}
 
 func readPacket(conn net.Conn) ([]byte, []byte, error) {
 	buf := make([]byte, 2)
