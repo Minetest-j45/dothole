@@ -8,6 +8,7 @@ A DNS over TLS recursive name server, inspired by [Pi-hole](https://pi-hole.net/
 
 ## Todo:
 injecting entries
+
 filtering entries (a block list, like pihole has)
 
 ## Testing:
