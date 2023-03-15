@@ -8,6 +8,7 @@ A DNS over TLS recursive name server, inspired by [Pi-hole](https://pi-hole.net/
 
 ## Todo:
 injecting entries
+filtering entries (a block list, like pihole has)
 
 ## Testing:
 Ensure you have a public private keypair saved to cert.pem and key.pem
