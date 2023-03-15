@@ -58,7 +58,7 @@ func readPacket(conn net.Conn) ([]byte, []byte, error) {
 	return raw, buf, nil
 }
 
-func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *cache) {
+func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *cache, blockList map[string]string) {
 	upstreamDialer := &tls.Dialer{
 		Config: tlsConf,
 	}
@@ -81,6 +81,7 @@ func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *cache) {
 				log.Fatal(err)
 			}
 
+			dontQuery := false
 			//check cache for the question
 			c.Lock()
 			for i, entry := range c.entries {
@@ -88,6 +89,7 @@ func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *cache) {
 
 					//check if cache entry is still valid
 					if time.Since(entry.t) < cacheValidTime {
+						dontQuery = true
 
 						response := new(dns.Msg)
 						response.SetReply(m)
@@ -116,6 +118,41 @@ func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *cache) {
 			}
 			c.Unlock()
 
+			//check blocklist for the question
+			if m.Question[0].Qtype == dns.TypeA {
+				if ip, ok := blockList[m.Question[0].Name]; ok {
+					dontQuery = true
+					log.Println("blocked:", m.Question[0].Name, "to", ip)
+					response := new(dns.Msg)
+					response.SetReply(m)
+					response.Answer = append(response.Answer, &dns.A{
+						Hdr: dns.RR_Header{
+							Name:   m.Question[0].Name,
+							Rrtype: dns.TypeA,
+							Class:  dns.ClassINET,
+							Ttl:    0,
+						},
+						A: net.ParseIP(ip),
+					})
+
+					responseRaw, err := response.Pack()
+					if err != nil {
+						return
+					}
+
+					//add 2 bytes length to the beginning of the packet
+					responseRaw = append([]byte{byte(len(responseRaw) >> 8), byte(len(responseRaw))}, responseRaw...)
+
+					_, err = localConn.Write(responseRaw)
+					if err != nil {
+						return
+					}
+				}
+			}
+
+			if dontQuery {
+				continue
+			}
 			_, err = upstreamConn.Write(raw)
 			if err != nil {
 				return
@@ -207,6 +244,6 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		go handleConnection(localConn, tlsConf, &c)
+		go handleConnection(localConn, tlsConf, &c, blocklist)
 	}
 }
