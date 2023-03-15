@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -15,10 +16,8 @@ import (
 	"github.com/miekg/dns"
 )
 
-var upstreamIP net.IP = net.ParseIP("208.67.220.220")
-var upstreamPort string = "853"
-
-var localPort string = "5353" //853 for tls
+var upstream *string
+var localPort *string
 
 type cacheEntry struct {
 	q dns.Question
@@ -31,7 +30,7 @@ type cache struct {
 	entries []cacheEntry
 }
 
-var cacheValidTime time.Duration = 10 * time.Second
+var cacheValidTime time.Duration = 10 * time.Second //todo: change to around 300 seconds
 
 func readPacket(conn net.Conn) ([]byte, []byte, error) {
 	buf := make([]byte, 2)
@@ -64,7 +63,7 @@ func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *cache) {
 		Config: tlsConf,
 	}
 
-	upstreamConn, err := upstreamDialer.Dial("tcp", upstreamIP.String()+":"+upstreamPort)
+	upstreamConn, err := upstreamDialer.Dial("tcp", *upstream)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -107,7 +106,7 @@ func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *cache) {
 							return
 						}
 
-						continue
+						break
 					} else {
 						//delete entry if it is not valid anymore
 						c.entries = append((c.entries)[:i], (c.entries)[i+1:]...)
@@ -136,16 +135,19 @@ func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *cache) {
 			log.Fatal(err)
 		}
 
-		c.Lock()
-		for i, entry := range c.entries {
-			if entry.q == m.Question[0] {
-				c.entries = append((c.entries)[:i], (c.entries)[i+1:]...) //delete entry if it already exists
+		if len(m.Answer) != 0 {
+			c.Lock()
+			for i, entry := range c.entries {
+				if entry.q == m.Question[0] {
+					c.entries = append((c.entries)[:i], (c.entries)[i+1:]...) //delete entry if it already exists
+					log.Println("replacing old entry from cache:", entry.q.Name)
+				}
 			}
-		}
 
-		//add to cache
-		c.entries = append(c.entries, cacheEntry{m.Question[0], m.Answer[0], time.Now()})
-		c.Unlock()
+			//add to cache
+			c.entries = append(c.entries, cacheEntry{m.Question[0], m.Answer[0], time.Now()})
+			c.Unlock()
+		}
 
 		_, err = localConn.Write(raw)
 		if err != nil {
@@ -155,6 +157,11 @@ func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *cache) {
 }
 
 func main() {
+	upstream = flag.String("upstream", "208.67.220.220:853", "upstream DNS over TLS server to use, format is ipaddr:port")
+	localPort = flag.String("local", "5353", "local port to listen on") //todo: change to 853
+	flag.Parse()
+
+	blocklist := loadList()
 	var c cache
 
 	certPEMBlock, err := os.ReadFile("cert.pem")
@@ -174,7 +181,7 @@ func main() {
 
 	var tlsConf = &tls.Config{Certificates: []tls.Certificate{cert}}
 
-	local, err := tls.Listen("tcp", ":"+localPort, tlsConf)
+	local, err := tls.Listen("tcp", ":"+*localPort, tlsConf)
 	if err != nil {
 		log.Fatal(err)
 	}
