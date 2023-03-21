@@ -34,7 +34,7 @@ type cache struct {
 
 var cacheValidTime time.Duration = 10 * time.Second //todo: change to around 300 seconds
 
-func loadList(url string) map[string]string {
+func loadList(list map[string]string, url string) map[string]string {
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil
@@ -45,18 +45,17 @@ func loadList(url string) map[string]string {
 
 	rawlines := strings.Split(string(raw), "\n")
 
-	blockList := make(map[string]string) // map of ips indexable by domain name
 	for _, line := range rawlines {
 		parts := strings.Split(line, " ")
 		if strings.HasPrefix(line, "#") || strings.TrimSpace(line) == "" || len(parts) < 2 {
 			continue
 		}
 
-		// add to blocklist
-		blockList[parts[1]+"."] = parts[0]
+		// add to list
+		list[parts[1]+"."] = parts[0]
 	}
 
-	return blockList
+	return list
 }
 
 func readPacket(conn net.Conn) ([]byte, []byte, error) {
@@ -85,7 +84,7 @@ func readPacket(conn net.Conn) ([]byte, []byte, error) {
 	return raw, buf, nil
 }
 
-func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *cache, block bool, blockList map[string]string) {
+func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *cache, list map[string]string) {
 	upstreamDialer := &tls.Dialer{
 		Config: tlsConf,
 	}
@@ -143,10 +142,10 @@ func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *cache, block b
 			}
 			c.Unlock()
 
-			if block {
+			if list != nil {
 				//check blocklist for the question
 				if m.Question[0].Qtype == dns.TypeA {
-					if ip, ok := blockList[m.Question[0].Name]; ok {
+					if ip, ok := list[m.Question[0].Name]; ok {
 						dontQuery = true
 						log.Println("blocked:", m.Question[0].Name, "to", ip)
 						response := new(dns.Msg)
@@ -227,7 +226,10 @@ func main() {
 	blocklistUrl := flag.String("blocklist", "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts", "url of blocklist to use")
 	flag.Parse()
 
-	blocklist := loadList(*blocklistUrl)
+	var list = make(map[string]string)
+	if *blocklistBool {
+		list = loadList(list, *blocklistUrl)
+	}
 
 	var c cache
 
@@ -274,6 +276,6 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		go handleConnection(localConn, tlsConf, &c, *blocklistBool, blocklist)
+		go handleConnection(localConn, tlsConf, &c, list)
 	}
 }
