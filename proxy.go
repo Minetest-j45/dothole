@@ -155,7 +155,6 @@ func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *cache, list ma
 			if list != nil {
 				//check blocklist for the question
 				if m.Question[0].Qtype == dns.TypeA {
-					log.Println(list[m.Question[0].Name])
 					if ip, ok := list[m.Question[0].Name]; ok {
 						dontQuery = true
 						log.Println("blocked:", m.Question[0].Name, "to", ip)
