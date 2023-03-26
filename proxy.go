@@ -250,7 +250,6 @@ func main() {
 	if *injectlistBool {
 		loadList(list, *injectlistFile, false)
 	}
-	log.Println(list)
 
 	var c cache
 
