@@ -22,9 +22,10 @@ var upstream *string
 var localPort *string
 
 type cacheEntry struct {
-	q dns.Question
-	a dns.RR
-	t time.Time
+	compress bool
+	question dns.Question
+	answer   dns.RR
+	t        time.Time
 }
 
 type cache struct {
@@ -34,14 +35,19 @@ type cache struct {
 
 var cacheValidTime time.Duration = 10 * time.Second //todo: change to around 300 seconds
 
-func loadList(list map[string]string, url string) map[string]string {
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
+func loadList(list map[string]string, location string, url bool) map[string]string {
+	var raw []byte
+	if url {
+		resp, err := http.Get(location)
+		if err != nil {
+			return list
+		}
+		defer resp.Body.Close()
 
-	raw, _ := io.ReadAll(resp.Body)
+		raw, _ = io.ReadAll(resp.Body)
+	} else {
+		raw, _ = os.ReadFile(location)
+	}
 
 	rawlines := strings.Split(string(raw), "\n")
 
@@ -54,7 +60,6 @@ func loadList(list map[string]string, url string) map[string]string {
 		// add to list
 		list[parts[1]+"."] = parts[0]
 	}
-
 	return list
 }
 
@@ -111,14 +116,19 @@ func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *cache, list ma
 			//check cache for the question
 			c.Lock()
 			for i, entry := range c.entries {
-				if entry.q == m.Question[0] {
+				if entry.question == m.Question[0] {
 					//check if cache entry is still valid
 					if time.Since(entry.t) < cacheValidTime {
 						dontQuery = true
 
 						response := new(dns.Msg)
 						response.SetReply(m)
-						response.Answer = append(response.Answer, entry.a)
+						response.Compress = entry.compress
+						response.Answer = append(response.Answer, entry.answer)
+
+						if response.MsgHdr.RecursionDesired {
+							response.MsgHdr.RecursionAvailable = true
+						}
 
 						responseRaw, err := response.Pack()
 						if err != nil {
@@ -145,6 +155,7 @@ func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *cache, list ma
 			if list != nil {
 				//check blocklist for the question
 				if m.Question[0].Qtype == dns.TypeA {
+					log.Println(list[m.Question[0].Name])
 					if ip, ok := list[m.Question[0].Name]; ok {
 						dontQuery = true
 						log.Println("blocked:", m.Question[0].Name, "to", ip)
@@ -159,6 +170,10 @@ func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *cache, list ma
 							},
 							A: net.ParseIP(ip),
 						})
+
+						if response.MsgHdr.RecursionDesired {
+							response.MsgHdr.RecursionAvailable = true
+						}
 
 						responseRaw, err := response.Pack()
 						if err != nil {
@@ -199,17 +214,19 @@ func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *cache, list ma
 		}
 
 		if len(m.Answer) != 0 {
-			c.Lock()
-			for i, entry := range c.entries {
-				if entry.q == m.Question[0] {
-					c.entries = append((c.entries)[:i], (c.entries)[i+1:]...) //delete entry if it already exists
-					log.Println("replacing old entry from cache:", entry.q.Name)
+			for j, question := range m.Question {
+				c.Lock()
+				for i, entry := range c.entries {
+					if entry.question == question {
+						c.entries = append((c.entries)[:i], (c.entries)[i+1:]...) //delete entry if it already exists
+						log.Println("replacing old entry from cache:", entry.question.Name)
+					}
 				}
-			}
 
-			//add to cache
-			c.entries = append(c.entries, cacheEntry{m.Question[0], m.Answer[0], time.Now()})
-			c.Unlock()
+				//add to cache
+				c.entries = append(c.entries, cacheEntry{m.Compress, question, m.Answer[j], time.Now()})
+				c.Unlock()
+			}
 		}
 
 		_, err = localConn.Write(raw)
@@ -224,11 +241,16 @@ func main() {
 	localPort = flag.String("local", "5353", "local port to listen on") //todo: change to 853
 	blocklistBool := flag.Bool("block", true, "wheter or not to use a blocklist")
 	blocklistUrl := flag.String("blocklist", "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts", "url of blocklist to use")
+	injectlistBool := flag.Bool("inject", true, "wheter or not to inject a list of domains")
+	injectlistFile := flag.String("injectlist", "./inject.txt", "file containing a list of domains to inject")
 	flag.Parse()
 
 	var list = make(map[string]string)
 	if *blocklistBool {
-		list = loadList(list, *blocklistUrl)
+		list = loadList(list, *blocklistUrl, true)
+	}
+	if *injectlistBool {
+		list = loadList(list, *injectlistFile, false)
 	}
 
 	var c cache
