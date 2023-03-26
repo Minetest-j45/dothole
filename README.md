@@ -6,9 +6,7 @@ A DNS over TLS recursive name server, inspired by [Pi-hole](https://pi-hole.net/
 1. DNS over TLS for both the client and the upstream server
 2. caching entries
 3. blocklists
-
-## Todo:
-injecting entries
+4. injecting results
 
 
 ## Testing:
