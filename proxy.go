@@ -35,12 +35,12 @@ type cache struct {
 
 var cacheValidTime time.Duration = 10 * time.Second //todo: change to around 300 seconds
 
-func loadList(list map[string]string, location string, url bool) map[string]string {
+func loadList(list map[string]string, location string, url bool) {
 	var raw []byte
 	if url {
 		resp, err := http.Get(location)
 		if err != nil {
-			return list
+			return
 		}
 		defer resp.Body.Close()
 
@@ -60,7 +60,6 @@ func loadList(list map[string]string, location string, url bool) map[string]stri
 		// add to list
 		list[parts[1]+"."] = parts[0]
 	}
-	return list
 }
 
 func readPacket(conn net.Conn) ([]byte, []byte, error) {
@@ -246,11 +245,12 @@ func main() {
 
 	var list = make(map[string]string)
 	if *blocklistBool {
-		list = loadList(list, *blocklistUrl, true)
+		loadList(list, *blocklistUrl, true)
 	}
 	if *injectlistBool {
-		list = loadList(list, *injectlistFile, false)
+		loadList(list, *injectlistFile, false)
 	}
+	log.Println(list)
 
 	var c cache
 
