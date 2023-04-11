@@ -64,7 +64,12 @@ func loadList(list map[string]string, location string, url bool) {
 
 func readPacket(conn net.Conn) ([]byte, []byte, error) {
 	buf := make([]byte, 2)
-	_, err := conn.Read(buf)
+	l, err := conn.Read(buf)
+	if l == 0 {
+		conn.Close()
+		return nil, nil, net.ErrClosed
+	}
+
 	if err != nil {
 		return nil, nil, errors.New("failed to read packet length")
 	}
