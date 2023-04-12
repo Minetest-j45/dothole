@@ -40,6 +40,7 @@ func loadList(list map[string]string, location string, url bool) {
 	if url {
 		resp, err := http.Get(location)
 		if err != nil {
+			log.Println(err)
 			return
 		}
 		defer resp.Body.Close()
@@ -64,14 +65,9 @@ func loadList(list map[string]string, location string, url bool) {
 
 func readPacket(conn net.Conn) ([]byte, []byte, error) {
 	buf := make([]byte, 2)
-	l, err := conn.Read(buf)
-	if l == 0 {
-		conn.Close()
-		return nil, nil, net.ErrClosed
-	}
-
+	_, err := conn.Read(buf)
 	if err != nil {
-		return nil, nil, errors.New("failed to read packet length")
+		return nil, nil, err
 	}
 
 	len := binary.BigEndian.Uint16(buf)
@@ -85,7 +81,7 @@ func readPacket(conn net.Conn) ([]byte, []byte, error) {
 	buf = make([]byte, len)
 	_, err = io.ReadFull(conn, buf)
 	if err != nil {
-		return nil, nil, errors.New("failed to read packet")
+		return nil, nil, err
 	}
 
 	copy(raw[2:], buf)
@@ -98,13 +94,15 @@ func handleConnection(localConn net.Conn, upstreamConn net.Conn, c *cache, list 
 		for {
 			raw, n, err := readPacket(localConn)
 			if err != nil {
+				log.Println(err)
 				return
 			}
 
 			m := new(dns.Msg)
 			err = m.Unpack(n)
 			if err != nil {
-				log.Fatal(err)
+				log.Println(err)
+				return
 			}
 
 			dontQuery := false
@@ -127,6 +125,7 @@ func handleConnection(localConn net.Conn, upstreamConn net.Conn, c *cache, list 
 
 						responseRaw, err := response.Pack()
 						if err != nil {
+							log.Println(err)
 							return
 						}
 
@@ -135,6 +134,7 @@ func handleConnection(localConn net.Conn, upstreamConn net.Conn, c *cache, list 
 
 						_, err = localConn.Write(responseRaw)
 						if err != nil {
+							log.Println(err)
 							return
 						}
 
@@ -171,6 +171,7 @@ func handleConnection(localConn net.Conn, upstreamConn net.Conn, c *cache, list 
 
 						responseRaw, err := response.Pack()
 						if err != nil {
+							log.Println(err)
 							return
 						}
 
@@ -179,6 +180,7 @@ func handleConnection(localConn net.Conn, upstreamConn net.Conn, c *cache, list 
 
 						_, err = localConn.Write(responseRaw)
 						if err != nil {
+							log.Println(err)
 							return
 						}
 					}
@@ -190,6 +192,7 @@ func handleConnection(localConn net.Conn, upstreamConn net.Conn, c *cache, list 
 			}
 			_, err = upstreamConn.Write(raw)
 			if err != nil {
+				log.Println(err)
 				return
 			}
 		}
@@ -198,13 +201,15 @@ func handleConnection(localConn net.Conn, upstreamConn net.Conn, c *cache, list 
 	for {
 		raw, n, err := readPacket(upstreamConn)
 		if err != nil {
+			log.Println(err)
 			return
 		}
 
 		m := new(dns.Msg)
 		err = m.Unpack(n)
 		if err != nil {
-			log.Fatal(err)
+			log.Println(err)
+			return
 		}
 
 		if len(m.Answer) != 0 {
@@ -225,6 +230,7 @@ func handleConnection(localConn net.Conn, upstreamConn net.Conn, c *cache, list 
 
 		_, err = localConn.Write(raw)
 		if err != nil {
+			log.Println(err)
 			return
 		}
 	}
@@ -299,7 +305,8 @@ func main() {
 	for {
 		localConn, err := local.Accept()
 		if err != nil {
-			log.Fatal(err)
+			log.Println(err)
+			return
 		}
 
 		go handleConnection(localConn, upstreamConn, &c, list)
