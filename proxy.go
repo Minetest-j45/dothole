@@ -93,16 +93,7 @@ func readPacket(conn net.Conn) ([]byte, []byte, error) {
 	return raw, buf, nil
 }
 
-func handleConnection(localConn net.Conn, tlsConf *tls.Config, c *cache, list map[string]string) {
-	upstreamDialer := &tls.Dialer{
-		Config: tlsConf,
-	}
-
-	upstreamConn, err := upstreamDialer.Dial("tcp", *upstream)
-	if err != nil {
-		log.Fatal(err)
-	}
-
+func handleConnection(localConn net.Conn, upstreamConn net.Conn, c *cache, list map[string]string) {
 	go func() {
 		for {
 			raw, n, err := readPacket(localConn)
@@ -280,6 +271,15 @@ func main() {
 		log.Fatal(err)
 	}
 
+	upstreamDialer := &tls.Dialer{
+		Config: tlsConf,
+	}
+
+	upstreamConn, err := upstreamDialer.Dial("tcp", *upstream)
+	if err != nil {
+		log.Fatal(err)
+	}
+	
 	go func() {
 		//clear outdated cache entries
 		for {
@@ -301,6 +301,7 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		go handleConnection(localConn, tlsConf, &c, list)
+
+		go handleConnection(localConn, upstreamConn, &c, list)
 	}
 }
