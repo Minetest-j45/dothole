@@ -150,7 +150,7 @@ func handleRequest(w dns.ResponseWriter, request *dns.Msg) {
 
 	if list != nil && request.Question[0].Qtype == dns.TypeA {
 		if block, ok := list[request.Question[0].Name]; ok { //check blocklist for the question
-			log.Println("blocked:", request.Question[0].Name, "to:", block)
+			log.Println("blocked/injected:", request.Question[0].Name, "to:", block)
 			reply := new(dns.Msg)
 			reply.SetReply(request)
 			reply.Answer = append(reply.Answer, &dns.A{
