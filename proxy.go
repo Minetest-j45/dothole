@@ -24,7 +24,7 @@ var list map[string]string
 type cacheEntry struct {
 	compress bool
 	question dns.Question
-	answer   dns.RR
+	answer   []dns.RR
 	ra       bool
 	t        time.Time
 }
@@ -136,7 +136,7 @@ func handleRequest(w dns.ResponseWriter, request *dns.Msg) {
 			reply := new(dns.Msg)
 			reply.SetReply(request)
 			reply.Compress = entry.compress
-			reply.Answer = append(reply.Answer, entry.answer)
+			reply.Answer = entry.answer
 			reply.MsgHdr.RecursionAvailable = entry.ra
 			w.WriteMsg(reply)
 			return
@@ -172,11 +172,9 @@ func handleRequest(w dns.ResponseWriter, request *dns.Msg) {
 		return
 	}
 
-	if len(reply.Answer) == 1 {
-		c.Lock()
-		c.entries[reply.Question[0]] = cacheEntry{reply.Compress, reply.Question[0], reply.Answer[0], reply.RecursionAvailable, time.Now()}
-		c.Unlock()
-	}
+	c.Lock()
+	c.entries[reply.Question[0]] = cacheEntry{reply.Compress, reply.Question[0], reply.Answer /*recursive answers possible (e.g. with CNAME records)*/, reply.RecursionAvailable, time.Now()}
+	c.Unlock()
 
 	w.WriteMsg(reply)
 }
