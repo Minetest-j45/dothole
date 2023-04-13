@@ -30,7 +30,7 @@ type cacheEntry struct {
 
 type cache struct {
 	sync.RWMutex
-	entries []cacheEntry
+	entries map[dns.Question]cacheEntry
 }
 
 var cacheValidTime time.Duration = 10 * time.Second //todo: change to around 300 seconds
@@ -40,7 +40,7 @@ func loadList(list map[string]string, location string, url bool) {
 	if url {
 		resp, err := http.Get(location)
 		if err != nil {
-			log.Println(err)
+			log.Println("error getting list", location, err)
 			return
 		}
 		defer resp.Body.Close()
@@ -94,105 +94,99 @@ func handleConnection(localConn net.Conn, upstreamConn net.Conn, c *cache, list 
 		for {
 			raw, n, err := readPacket(localConn)
 			if err != nil {
-				log.Println(err)
+				log.Println("local read error", err)
 				return
 			}
 
 			m := new(dns.Msg)
 			err = m.Unpack(n)
 			if err != nil {
-				log.Println(err)
+				log.Println("dns unpack error", err)
 				return
 			}
 
-			dontQuery := false
 			//check cache for the question
+			response := new(dns.Msg)
+			response.SetReply(m)
+			anyCache := false
+
 			c.Lock()
-			for i, entry := range c.entries {
-				if entry.question == m.Question[0] {
+			for _, q := range m.Question {
+				if entry, ok := c.entries[q]; ok {
 					//check if cache entry is still valid
 					if time.Since(entry.t) < cacheValidTime {
-						dontQuery = true
-
-						response := new(dns.Msg)
-						response.SetReply(m)
-						response.Compress = entry.compress
+						anyCache = true
+						response.Compress = response.Compress || entry.compress
 						response.Answer = append(response.Answer, entry.answer)
-
-						if response.MsgHdr.RecursionDesired {
-							response.MsgHdr.RecursionAvailable = true
-						}
-
-						responseRaw, err := response.Pack()
-						if err != nil {
-							log.Println(err)
-							return
-						}
-
-						//add 2 bytes length to the beginning of the packet
-						responseRaw = append([]byte{byte(len(responseRaw) >> 8), byte(len(responseRaw))}, responseRaw...)
-
-						_, err = localConn.Write(responseRaw)
-						if err != nil {
-							log.Println(err)
-							return
-						}
-
-						break
 					} else {
-						//delete entry if it is not valid anymore
-						c.entries = append((c.entries)[:i], (c.entries)[i+1:]...)
+						delete(c.entries, q) //delete entry if it is not valid anymore
 					}
 				}
 			}
 			c.Unlock()
 
+			if anyCache {
+				if response.MsgHdr.RecursionDesired {
+					response.MsgHdr.RecursionAvailable = true
+				}
+
+				responseRaw, err := response.Pack()
+				if err != nil {
+					log.Println("dns pack error", err)
+					return
+				}
+
+				_, err = localConn.Write(append([]byte{byte(len(responseRaw) >> 8), byte(len(responseRaw))}, responseRaw...))
+				if err != nil {
+					log.Println("local write error", err)
+					return
+				}
+			}
+
 			if list != nil {
-				//check blocklist for the question
-				if m.Question[0].Qtype == dns.TypeA {
-					if ip, ok := list[m.Question[0].Name]; ok {
-						dontQuery = true
-						log.Println("blocked:", m.Question[0].Name, "to", ip)
-						response := new(dns.Msg)
-						response.SetReply(m)
+				response := new(dns.Msg)
+				response.SetReply(m)
+				anyBlock := false
+
+				for _, q := range m.Question {
+					//check blocklist for the question
+					if ip, ok := list[q.Name]; ok {
+						anyBlock = true
+						log.Println("blocked:", q.Name, "to", ip)
 						response.Answer = append(response.Answer, &dns.A{
 							Hdr: dns.RR_Header{
-								Name:   m.Question[0].Name,
-								Rrtype: dns.TypeA,
+								Name:   q.Name,
+								Rrtype: q.Qtype,
 								Class:  dns.ClassINET,
 								Ttl:    0,
 							},
 							A: net.ParseIP(ip),
 						})
+					}
+				}
 
-						if response.MsgHdr.RecursionDesired {
-							response.MsgHdr.RecursionAvailable = true
-						}
+				if anyBlock {
+					if response.MsgHdr.RecursionDesired {
+						response.MsgHdr.RecursionAvailable = true
+					}
 
-						responseRaw, err := response.Pack()
-						if err != nil {
-							log.Println(err)
-							return
-						}
+					responseRaw, err := response.Pack()
+					if err != nil {
+						log.Println("dns pack error", err)
+						return
+					}
 
-						//add 2 bytes length to the beginning of the packet
-						responseRaw = append([]byte{byte(len(responseRaw) >> 8), byte(len(responseRaw))}, responseRaw...)
-
-						_, err = localConn.Write(responseRaw)
-						if err != nil {
-							log.Println(err)
-							return
-						}
+					_, err = localConn.Write(append([]byte{byte(len(responseRaw) >> 8), byte(len(responseRaw))}, responseRaw...))
+					if err != nil {
+						log.Println("local write error", err)
+						return
 					}
 				}
 			}
 
-			if dontQuery {
-				continue
-			}
 			_, err = upstreamConn.Write(raw)
 			if err != nil {
-				log.Println(err)
+				log.Println("upstream write error", err)
 				return
 			}
 		}
@@ -201,36 +195,29 @@ func handleConnection(localConn net.Conn, upstreamConn net.Conn, c *cache, list 
 	for {
 		raw, n, err := readPacket(upstreamConn)
 		if err != nil {
-			log.Println(err)
+			log.Println("upstream read error", err)
 			return
 		}
 
 		m := new(dns.Msg)
 		err = m.Unpack(n)
 		if err != nil {
-			log.Println(err)
+			log.Println("dns unpack error", err)
 			return
 		}
 
 		if len(m.Answer) != 0 {
+			c.Lock()
 			for j, question := range m.Question {
-				c.Lock()
-				for i, entry := range c.entries {
-					if entry.question == question {
-						c.entries = append((c.entries)[:i], (c.entries)[i+1:]...) //delete entry if it already exists
-						log.Println("replacing old entry from cache:", entry.question.Name)
-					}
-				}
-
 				//add to cache
-				c.entries = append(c.entries, cacheEntry{m.Compress, question, m.Answer[j], time.Now()})
-				c.Unlock()
+				c.entries[question] = cacheEntry{m.Compress, question, m.Answer[j], time.Now()}
 			}
+			c.Unlock()
 		}
 
 		_, err = localConn.Write(raw)
 		if err != nil {
-			log.Println(err)
+			log.Println("local write error", err)
 			return
 		}
 	}
@@ -254,6 +241,7 @@ func main() {
 	}
 
 	var c cache
+	c.entries = make(map[dns.Question]cacheEntry)
 
 	certPEMBlock, err := os.ReadFile("cert.pem")
 	if err != nil {
@@ -285,7 +273,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	
+
 	go func() {
 		//clear outdated cache entries
 		for {
@@ -293,7 +281,7 @@ func main() {
 			for i, entry := range c.entries {
 				if time.Since(entry.t) > cacheValidTime {
 					log.Println("deleting cache entry", entry)
-					c.entries = append(c.entries[:i], c.entries[i+1:]...)
+					delete(c.entries, i)
 				}
 			}
 			c.Unlock()
@@ -305,7 +293,7 @@ func main() {
 	for {
 		localConn, err := local.Accept()
 		if err != nil {
-			log.Println(err)
+			log.Println("local accept error", err)
 			return
 		}
 
