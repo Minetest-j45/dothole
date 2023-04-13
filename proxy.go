@@ -25,6 +25,7 @@ type cacheEntry struct {
 	compress bool
 	question dns.Question
 	answer   dns.RR
+	ra       bool
 	t        time.Time
 }
 
@@ -136,9 +137,7 @@ func handleRequest(w dns.ResponseWriter, request *dns.Msg) {
 			reply.SetReply(request)
 			reply.Compress = entry.compress
 			reply.Answer = append(reply.Answer, entry.answer)
-			if reply.MsgHdr.RecursionDesired {
-				reply.MsgHdr.RecursionAvailable = true
-			}
+			reply.MsgHdr.RecursionAvailable = entry.ra
 			w.WriteMsg(reply)
 			return
 		} else {
@@ -162,9 +161,7 @@ func handleRequest(w dns.ResponseWriter, request *dns.Msg) {
 				},
 				A: net.ParseIP(block),
 			})
-			if reply.MsgHdr.RecursionDesired {
-				reply.MsgHdr.RecursionAvailable = true
-			}
+			reply.MsgHdr.RecursionAvailable = true
 			w.WriteMsg(reply)
 			return
 		}
@@ -177,7 +174,7 @@ func handleRequest(w dns.ResponseWriter, request *dns.Msg) {
 
 	if len(reply.Answer) == 1 {
 		c.Lock()
-		c.entries[reply.Question[0]] = cacheEntry{reply.Compress, reply.Question[0], reply.Answer[0], time.Now()}
+		c.entries[reply.Question[0]] = cacheEntry{reply.Compress, reply.Question[0], reply.Answer[0], reply.RecursionAvailable, time.Now()}
 		c.Unlock()
 	}
 
