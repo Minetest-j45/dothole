@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/tls"
 	"flag"
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -16,7 +15,7 @@ import (
 	"github.com/miekg/dns"
 )
 
-var upstreamAddr string
+var upstreamAddr *string
 var client *dns.Client
 var c cache
 var list map[string]string
@@ -34,7 +33,7 @@ type cache struct {
 	entries map[dns.Question]cacheEntry
 }
 
-var cacheValidTime time.Duration = 10 * time.Second //todo: change to around 300 seconds
+var cacheValidTime time.Duration = 300 * time.Second
 
 func loadList(list map[string]string, location string, url bool) {
 	var raw []byte
@@ -51,9 +50,7 @@ func loadList(list map[string]string, location string, url bool) {
 		raw, _ = os.ReadFile(location)
 	}
 
-	rawlines := strings.Split(string(raw), "\n")
-
-	for _, line := range rawlines {
+	for _, line := range strings.Split(string(raw), "\n") {
 		parts := strings.Split(line, " ")
 		if strings.HasPrefix(line, "#") || strings.TrimSpace(line) == "" || len(parts) < 2 {
 			continue
@@ -64,20 +61,30 @@ func loadList(list map[string]string, location string, url bool) {
 }
 
 func main() {
-	upstreamAddr = *flag.String("upstream", "208.67.220.220:853", "upstream DNS over TLS server to use, format is ipaddr:port")
-	localPort := flag.String("local", "5353", "local port to listen on") //todo: change to 853
+	upstreamNet := flag.String("upstreamnet", "tcp-tls", "udp or tcp or tcp-tls")
+	upstreamAddr = flag.String("upstream", "208.67.220.220:853", "upstream DNS server to use, format is ipaddr:port")
+	localNet := flag.String("localnet", "tcp-tls", "udp or tcp or tcp-tls")
+	localPort := flag.String("local", "853", "local port to listen on")
 	blocklistBool := flag.Bool("block", true, "wheter or not to use a blocklist")
-	blocklistUrl := flag.String("blocklist", "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts", "url of blocklist to use")
+	blocklistLocation := flag.String("blocklist", "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts", "url of blocklist to use")
 	injectlistBool := flag.Bool("inject", true, "wheter or not to inject a list of domains")
-	injectlistFile := flag.String("injectlist", "./inject.txt", "file containing a list of domains to inject")
+	injectlistLocation := flag.String("injectlist", "./inject.txt", "file containing a list of domains to inject")
 	flag.Parse()
+
+	if (*upstreamNet != "udp") && (*upstreamNet != "tcp") && (*upstreamNet != "tcp-tls") {
+		log.Fatal("upstreamnet needs to be either udp, tcp or tcp-tls")
+	}
+
+	if (*localNet != "udp") && (*localNet != "tcp") && (*localNet != "tcp-tls") {
+		log.Fatal("localnet needs to be either udp, tcp or tcp-tls")
+	}
 
 	list = make(map[string]string)
 	if *blocklistBool {
-		loadList(list, *blocklistUrl, true)
+		loadList(list, *blocklistLocation, strings.HasPrefix(*blocklistLocation, "http://") || strings.HasPrefix(*blocklistLocation, "https://"))
 	}
 	if *injectlistBool {
-		loadList(list, *injectlistFile, false)
+		loadList(list, *injectlistLocation, strings.HasPrefix(*injectlistLocation, "http://") || strings.HasPrefix(*injectlistLocation, "https://"))
 	}
 
 	c.entries = make(map[dns.Question]cacheEntry)
@@ -115,13 +122,13 @@ func main() {
 	tlsConf := &tls.Config{Certificates: []tls.Certificate{cert}}
 
 	dns.HandleFunc(".", handleRequest)
-
-	client = &dns.Client{Net: "tcp-tls", TLSConfig: tlsConf}
-	server := &dns.Server{Addr: ":" + *localPort, Net: "tcp-tls", TLSConfig: tlsConf}
+	client = &dns.Client{Net: *upstreamNet, TLSConfig: tlsConf}
+	server := &dns.Server{Addr: ":" + *localPort, Net: *localNet, TLSConfig: tlsConf}
+	log.Println("ready")
 	err = server.ListenAndServe()
 	defer server.Shutdown()
 	if err != nil {
-		fmt.Println(err)
+		log.Fatal(err)
 	}
 }
 
@@ -132,7 +139,7 @@ func handleRequest(w dns.ResponseWriter, request *dns.Msg) {
 
 	if ok {
 		if time.Since(entry.t) < cacheValidTime { //check if cache entry is still valid
-			fmt.Println("replying to", request.Question[0], "with cache:", entry)
+			log.Println("replying to", request.Question[0], "with cache:", entry)
 			reply := new(dns.Msg)
 			reply.SetReply(request)
 			reply.Compress = entry.compress
@@ -167,7 +174,7 @@ func handleRequest(w dns.ResponseWriter, request *dns.Msg) {
 		}
 	}
 
-	reply, _, err := client.Exchange(request, upstreamAddr)
+	reply, _, err := client.Exchange(request, *upstreamAddr)
 	if err != nil {
 		return
 	}
