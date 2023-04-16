@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"crypto/tls"
 	"flag"
 	"io"
@@ -35,9 +37,9 @@ type cache struct {
 
 var cacheValidTime time.Duration = 300 * time.Second
 
-func loadList(list map[string]string, location string, url bool) {
-	var raw []byte
-	if url {
+func loadList(list map[string]string, location string) {
+	var buf bytes.Buffer
+	if strings.HasPrefix(location, "http://") || strings.HasPrefix(location, "https://") {
 		resp, err := http.Get(location)
 		if err != nil {
 			log.Println("error getting list", location, err)
@@ -45,12 +47,25 @@ func loadList(list map[string]string, location string, url bool) {
 		}
 		defer resp.Body.Close()
 
-		raw, _ = io.ReadAll(resp.Body)
+		_, err = io.Copy(&buf, resp.Body)
+		if err != nil {
+			log.Println("error reading http response", err)
+			return
+		}
 	} else {
-		raw, _ = os.ReadFile(location)
+		f, err := os.Open(location)
+		if err != nil {
+			log.Println("error opening file", err)
+		}
+		defer f.Close()
+
+		_, err = io.Copy(&buf, bufio.NewReader(f))
+		if err != nil {
+			log.Println("error reading file", err)
+		}
 	}
 
-	for _, line := range strings.Split(string(raw), "\n") {
+	for _, line := range strings.Split(buf.String(), "\n") {
 		parts := strings.Split(line, " ")
 		if strings.HasPrefix(line, "#") || strings.TrimSpace(line) == "" || len(parts) < 2 {
 			continue
@@ -81,10 +96,10 @@ func main() {
 
 	list = make(map[string]string)
 	if *blocklistBool {
-		loadList(list, *blocklistLocation, strings.HasPrefix(*blocklistLocation, "http://") || strings.HasPrefix(*blocklistLocation, "https://"))
+		loadList(list, *blocklistLocation)
 	}
 	if *injectlistBool {
-		loadList(list, *injectlistLocation, strings.HasPrefix(*injectlistLocation, "http://") || strings.HasPrefix(*injectlistLocation, "https://"))
+		loadList(list, *injectlistLocation)
 	}
 
 	c.entries = make(map[dns.Question]cacheEntry)
