@@ -133,25 +133,20 @@ func main() {
 }
 
 func handleRequest(w dns.ResponseWriter, request *dns.Msg) {
+	request.Question[0].Name = strings.ToLower(request.Question[0].Name)
 	c.RLock()
 	entry, ok := c.entries[request.Question[0]]
 	c.RUnlock()
 
-	if ok {
-		if time.Since(entry.t) < cacheValidTime { //check if cache entry is still valid
-			log.Println("replying to", request.Question[0], "with cache:", entry)
-			reply := new(dns.Msg)
-			reply.SetReply(request)
-			reply.Compress = entry.compress
-			reply.Answer = entry.answer
-			reply.MsgHdr.RecursionAvailable = entry.ra
-			w.WriteMsg(reply)
-			return
-		} else {
-			c.Lock()
-			delete(c.entries, entry.question) //delete entry if it is not valid anymore
-			c.Unlock()
-		}
+	if ok && time.Since(entry.t) < cacheValidTime { //check if cache entry is still valid
+		log.Println("replying to", request.Question[0], "with cache:", entry)
+		reply := new(dns.Msg)
+		reply.SetReply(request)
+		reply.Compress = entry.compress
+		reply.Answer = entry.answer
+		reply.MsgHdr.RecursionAvailable = entry.ra
+		w.WriteMsg(reply)
+		return
 	}
 
 	if list != nil && request.Question[0].Qtype == dns.TypeA {
@@ -176,6 +171,7 @@ func handleRequest(w dns.ResponseWriter, request *dns.Msg) {
 
 	reply, _, err := client.Exchange(request, *upstreamAddr)
 	if err != nil {
+		log.Println("error forwarding request:", err)
 		return
 	}
 
