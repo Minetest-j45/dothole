@@ -17,10 +17,10 @@ import (
 	"github.com/miekg/dns"
 )
 
-var upstreamAddr *string
 var client *dns.Client
 var c cache
 var list map[string]string
+var clientConn *dns.Conn
 
 type cacheEntry struct {
 	compress bool
@@ -35,7 +35,7 @@ type cache struct {
 	entries map[dns.Question]cacheEntry
 }
 
-var cacheValidTime time.Duration = 300 * time.Second
+const cacheValidTime time.Duration = 300 * time.Second
 
 func loadList(list map[string]string, location string) {
 	var buf bytes.Buffer
@@ -66,8 +66,8 @@ func loadList(list map[string]string, location string) {
 	}
 
 	for _, line := range strings.Split(buf.String(), "\n") {
-		parts := strings.Split(line, " ")
-		if strings.HasPrefix(line, "#") || strings.TrimSpace(line) == "" || len(parts) < 2 {
+		parts := strings.Fields(line)
+		if strings.HasPrefix(line, "#") || len(parts) != 2 {
 			continue
 		}
 
@@ -76,31 +76,57 @@ func loadList(list map[string]string, location string) {
 }
 
 func main() {
-	upstreamNet := flag.String("upstreamnet", "tcp-tls", "udp or tcp or tcp-tls")
-	upstreamAddr = flag.String("upstream", "208.67.220.220:853", "upstream DNS server to use, format is ipaddr:port")
-	localNet := flag.String("localnet", "tcp-tls", "udp or tcp or tcp-tls")
-	localPort := flag.String("local", "853", "local port to listen on")
-	blocklistBool := flag.Bool("block", true, "wheter or not to use a blocklist")
-	blocklistLocation := flag.String("blocklist", "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts", "url of blocklist to use")
-	injectlistBool := flag.Bool("inject", true, "wheter or not to inject a list of domains")
-	injectlistLocation := flag.String("injectlist", "./inject.txt", "file containing a list of domains to inject")
+	upstreamNet := flag.String("upstream-net", "tcp-tls", "Type of upstream network connection to use (udp, tcp, tcp-tls)")
+	upstreamAddr := flag.String("upstream-addr", "208.67.220.220:853", "Upstream DNS server address to use (ipaddr:port)")
+	localNet := flag.String("local-net", "tcp-tls", "Type of local network connection to use (udp, tcp, tcp-tls)")
+	localPort := flag.String("local-port", "853", "Local port to listen on")
+	blocklistBool := flag.Bool("blocklist-enabled", true, "Whether or not to use a blocklist")
+	blocklistLocation := flag.String("blocklist-location", "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts", "URL or file containing a list of domains to block")
+	injectlistBool := flag.Bool("injectlist-enabled", true, "Whether or not to inject a list of domains")
+	injectlistLocation := flag.String("injectlist-location", "./inject.txt", "URL or file containing a list of domains to inject")
+
+	// shortcuts
+	flag.StringVar(upstreamNet, "un", "tcp-tls", "Type of upstream network connection to use (udp, tcp, tcp-tls)")
+	flag.StringVar(upstreamAddr, "ua", "208.67.220.220:853", "Upstream DNS server address to use (ipaddr:port)")
+	flag.StringVar(localNet, "ln", "tcp-tls", "Type of local network connection to use (udp, tcp, tcp-tls)")
+	flag.StringVar(localPort, "lp", "853", "Local port to listen on")
+	flag.BoolVar(blocklistBool, "be", true, "Whether or not to use a blocklist")
+	flag.StringVar(blocklistLocation, "bl", "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts", "URL or file containing a list of domains to block")
+	flag.BoolVar(injectlistBool, "ie", true, "Whether or not to inject a list of domains")
+	flag.StringVar(injectlistLocation, "il", "./inject.txt", "URL or file containing a list of domains to inject")
+
 	flag.Parse()
 
-	if (*upstreamNet != "udp") && (*upstreamNet != "tcp") && (*upstreamNet != "tcp-tls") {
-		log.Fatal("upstreamnet needs to be either udp, tcp or tcp-tls")
+	switch *upstreamNet {
+	case "udp", "tcp", "tcp-tls":
+	default:
+		log.Fatal("upstream-net needs to be either udp, tcp, or tcp-tls")
 	}
 
-	if (*localNet != "udp") && (*localNet != "tcp") && (*localNet != "tcp-tls") {
-		log.Fatal("localnet needs to be either udp, tcp or tcp-tls")
+	switch *localNet {
+	case "udp", "tcp", "tcp-tls":
+	default:
+		log.Fatal("local-net needs to be either udp, tcp, or tcp-tls")
 	}
 
 	list = make(map[string]string)
+	wg := sync.WaitGroup{}
 	if *blocklistBool {
-		loadList(list, *blocklistLocation)
+		wg.Add(1)
+		go func() {
+			loadList(list, *blocklistLocation)
+			wg.Done()
+		}()
 	}
 	if *injectlistBool {
-		loadList(list, *injectlistLocation)
+		wg.Add(1)
+		go func() {
+			loadList(list, *injectlistLocation)
+			wg.Done()
+		}()
 	}
+
+	wg.Wait()
 
 	c.entries = make(map[dns.Question]cacheEntry)
 
@@ -138,10 +164,15 @@ func main() {
 
 	dns.HandleFunc(".", handleRequest)
 	client = &dns.Client{Net: *upstreamNet, TLSConfig: tlsConf}
+	clientConn, err = client.Dial(*upstreamAddr)
+	if err != nil {
+		log.Println("error connecting to upstream server", err)
+	}
+
 	server := &dns.Server{Addr: ":" + *localPort, Net: *localNet, TLSConfig: tlsConf}
+	defer server.Shutdown()
 	log.Println("ready")
 	err = server.ListenAndServe()
-	defer server.Shutdown()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -184,7 +215,7 @@ func handleRequest(w dns.ResponseWriter, request *dns.Msg) {
 		}
 	}
 
-	reply, _, err := client.Exchange(request, *upstreamAddr)
+	reply, _, err := client.ExchangeWithConn(request, clientConn)
 	if err != nil {
 		log.Println("error forwarding request:", err)
 		return
