@@ -2,10 +2,8 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"crypto/tls"
 	"flag"
-	"io"
 	"log"
 	"net"
 	"net/http"
@@ -38,7 +36,7 @@ type cache struct {
 const cacheValidTime time.Duration = 300 * time.Second
 
 func loadList(list map[string]string, location string) {
-	var buf bytes.Buffer
+	var scanner *bufio.Scanner
 	if strings.HasPrefix(location, "http://") || strings.HasPrefix(location, "https://") {
 		resp, err := http.Get(location)
 		if err != nil {
@@ -47,11 +45,7 @@ func loadList(list map[string]string, location string) {
 		}
 		defer resp.Body.Close()
 
-		_, err = io.Copy(&buf, resp.Body)
-		if err != nil {
-			log.Println("error reading http response", err)
-			return
-		}
+		scanner = bufio.NewScanner(resp.Body)
 	} else {
 		f, err := os.Open(location)
 		if err != nil {
@@ -59,15 +53,12 @@ func loadList(list map[string]string, location string) {
 		}
 		defer f.Close()
 
-		_, err = io.Copy(&buf, bufio.NewReader(f))
-		if err != nil {
-			log.Println("error reading file", err)
-		}
+		scanner = bufio.NewScanner(f)
 	}
 
-	for _, line := range strings.Split(buf.String(), "\n") {
-		parts := strings.Fields(line)
-		if strings.HasPrefix(line, "#") || len(parts) != 2 {
+	for scanner.Scan() {
+		parts := strings.Fields(scanner.Text())
+		if strings.HasPrefix(scanner.Text(), "#") || len(parts) != 2 {
 			continue
 		}
 
