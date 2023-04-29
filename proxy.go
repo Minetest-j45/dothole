@@ -3,13 +3,16 @@ package main
 import (
 	"bufio"
 	"crypto/tls"
+	"errors"
 	"flag"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/miekg/dns"
@@ -19,6 +22,7 @@ var client *dns.Client
 var c cache
 var list map[string]string
 var clientConn *dns.Conn
+var upstreamAddr *string
 
 type cacheEntry struct {
 	compress bool
@@ -68,7 +72,7 @@ func loadList(list map[string]string, location string) {
 
 func main() {
 	upstreamNet := flag.String("upstream-net", "tcp-tls", "Type of upstream network connection to use (udp, tcp, tcp-tls)")
-	upstreamAddr := flag.String("upstream-addr", "208.67.220.220:853", "Upstream DNS server address to use (ipaddr:port)")
+	upstreamAddr = flag.String("upstream-addr", "208.67.220.220:853", "Upstream DNS server address to use (ipaddr:port)")
 	localNet := flag.String("local-net", "tcp-tls", "Type of local network connection to use (udp, tcp, tcp-tls)")
 	localPort := flag.String("local-port", "853", "Local port to listen on")
 	blocklistBool := flag.Bool("blocklist-enabled", true, "Whether or not to use a blocklist")
@@ -157,7 +161,7 @@ func main() {
 	client = &dns.Client{Net: *upstreamNet, TLSConfig: tlsConf}
 	clientConn, err = client.Dial(*upstreamAddr)
 	if err != nil {
-		log.Println("error connecting to upstream server", err)
+		log.Fatal("error connecting to upstream server:", err)
 	}
 
 	server := &dns.Server{Addr: ":" + *localPort, Net: *localNet, TLSConfig: tlsConf}
@@ -206,9 +210,23 @@ func handleRequest(w dns.ResponseWriter, request *dns.Msg) {
 		}
 	}
 
+RETRY:
 	reply, _, err := client.ExchangeWithConn(request, clientConn)
 	if err != nil {
-		log.Println("error forwarding request:", err)
+		switch {
+		case
+			errors.Is(err, net.ErrClosed),
+			errors.Is(err, io.EOF),
+			errors.Is(err, syscall.EPIPE):
+			log.Println("reopenning connection after closed:", err)
+			clientConn, err = client.Dial(*upstreamAddr)
+			if err != nil {
+				log.Fatal("error reconnecting to upstream server:", err)
+			}
+			goto RETRY
+		default:
+			log.Println("unable to process error:", err)
+		}
 		return
 	}
 
