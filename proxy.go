@@ -104,7 +104,6 @@ func main() {
 		log.Fatal("local-net needs to be either udp, tcp, or tcp-tls")
 	}
 
-    //TODO: time test from here
 	list = make(map[string]string)
 	wg := sync.WaitGroup{}
 	if *blocklistBool {
