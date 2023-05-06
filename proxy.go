@@ -71,7 +71,7 @@ func loadList(list map[string]string, location string) {
 }
 
 func main() {
-	upstreamNet := flag.String("upstream-net", "tcp-tls", "Type of upstream network connection to use (udp, tcp, tcp-tls)")
+    upstreamNet := flag.String("upstream-net", "tcp-tls", "Type of upstream network connection to use (udp, tcp, tcp-tls)")
 	upstreamAddr = flag.String("upstream-addr", "208.67.220.220:853", "Upstream DNS server address to use (ipaddr:port)")
 	localNet := flag.String("local-net", "tcp-tls", "Type of local network connection to use (udp, tcp, tcp-tls)")
 	localPort := flag.String("local-port", "853", "Local port to listen on")
@@ -104,6 +104,7 @@ func main() {
 		log.Fatal("local-net needs to be either udp, tcp, or tcp-tls")
 	}
 
+    //TODO: time test from here
 	list = make(map[string]string)
 	wg := sync.WaitGroup{}
 	if *blocklistBool {
@@ -175,40 +176,49 @@ func main() {
 
 func handleRequest(w dns.ResponseWriter, request *dns.Msg) {
 	request.Question[0].Name = strings.ToLower(request.Question[0].Name)
-	c.RLock()
-	entry, ok := c.entries[request.Question[0]]
-	c.RUnlock()
 
-	if ok && time.Since(entry.t) < cacheValidTime { //check if cache entry is still valid
-		log.Println("replying to", request.Question[0], "with cache:", entry)
-		reply := new(dns.Msg)
-		reply.SetReply(request)
-		reply.Compress = entry.compress
-		reply.Answer = entry.answer
-		reply.MsgHdr.RecursionAvailable = entry.ra
-		w.WriteMsg(reply)
-		return
-	}
+    done := false
 
-	if list != nil && request.Question[0].Qtype == dns.TypeA {
-		if block, ok := list[request.Question[0].Name]; ok { //check blocklist for the question
-			log.Println("blocked/injected:", request.Question[0].Name, "to:", block)
-			reply := new(dns.Msg)
-			reply.SetReply(request)
-			reply.Answer = append(reply.Answer, &dns.A{
-				Hdr: dns.RR_Header{
-					Name:   request.Question[0].Name,
-					Rrtype: dns.TypeA,
-					Class:  dns.ClassINET,
-					Ttl:    0,
-				},
-				A: net.ParseIP(block),
-			})
-			reply.MsgHdr.RecursionAvailable = true
-			w.WriteMsg(reply)
-			return
-		}
-	}
+    //idea: use goroutines, already send request to upstream but just ignore if in cache/list
+    go func(d *bool) {
+        c.RLock()
+        entry, ok := c.entries[request.Question[0]]
+        c.RUnlock()
+
+        if ok && time.Since(entry.t) < cacheValidTime { //check if cache entry is still valid
+            log.Println("replying to", request.Question[0], "with cache:", entry)
+            reply := new(dns.Msg)
+            reply.SetReply(request)
+            reply.Compress = entry.compress
+            reply.Answer = entry.answer
+            reply.MsgHdr.RecursionAvailable = entry.ra
+            w.WriteMsg(reply)
+            *d = true
+            return
+        }
+
+        if list != nil && request.Question[0].Qtype == dns.TypeA {
+            if block, ok := list[request.Question[0].Name]; ok { //check blocklist for the question
+                log.Println("blocked/injected:", request.Question[0].Name, "to:", block)
+                reply := new(dns.Msg)
+                reply.SetReply(request)
+                reply.Answer = append(reply.Answer, &dns.A{
+                    Hdr: dns.RR_Header{
+                        Name:   request.Question[0].Name,
+                        Rrtype: dns.TypeA,
+                        Class:  dns.ClassINET,
+                        Ttl:    0,
+                    },
+                    A: net.ParseIP(block),
+                })
+                reply.MsgHdr.RecursionAvailable = true
+                w.WriteMsg(reply)
+                *d = true
+                return
+            }
+        }
+    }(&done)
+
 
 RETRY:
 	reply, _, err := client.ExchangeWithConn(request, clientConn)
@@ -234,5 +244,7 @@ RETRY:
 	c.entries[reply.Question[0]] = cacheEntry{reply.Compress, reply.Question[0], reply.Answer /*recursive answers possible (e.g. with CNAME records)*/, reply.RecursionAvailable, time.Now()}
 	c.Unlock()
 
-	w.WriteMsg(reply)
+    if done != true {
+    	w.WriteMsg(reply)
+    }
 }
