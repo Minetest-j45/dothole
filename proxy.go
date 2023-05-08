@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/prometheus/client_golang/prometheus"
+	//"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 var client *dns.Client
@@ -23,6 +25,9 @@ var c cache
 var list map[string]string
 var clientConn *dns.Conn
 var upstreamAddr *string
+
+var prometheusBool *bool
+var prometheusStats = make(map[string]prometheus.Counter)
 
 type cacheEntry struct {
 	compress bool
@@ -79,18 +84,26 @@ func main() {
 	blocklistLocation := flag.String("blocklist-location", "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts", "URL or file containing a list of domains to block")
 	injectlistBool := flag.Bool("injectlist-enabled", true, "Whether or not to inject a list of domains")
 	injectlistLocation := flag.String("injectlist-location", "./inject.txt", "URL or file containing a list of domains to inject")
+    prometheusBool = flag.Bool("prometheus", true, "Whether or not to run a prometheus client and http server")
+    prometheusHttpsPort := flag.String("prometheus-port", "8080", "The port for the prometheus http server to serve on")
 
 	// shortcuts
 	flag.StringVar(upstreamNet, "un", "tcp-tls", "Type of upstream network connection to use (udp, tcp, tcp-tls)")
-	flag.StringVar(upstreamAddr, "ua", "208.67.220.220:853", "Upstream DNS server address to use (ipaddr:port)")
+	flag.StringVar(upstreamAddr, "ua", "8.8.8.8:853", "Upstream DNS server address to use (ipaddr:port)")
 	flag.StringVar(localNet, "ln", "tcp-tls", "Type of local network connection to use (udp, tcp, tcp-tls)")
 	flag.StringVar(localPort, "lp", "853", "Local port to listen on")
 	flag.BoolVar(blocklistBool, "be", true, "Whether or not to use a blocklist")
 	flag.StringVar(blocklistLocation, "bl", "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts", "URL or file containing a list of domains to block")
 	flag.BoolVar(injectlistBool, "ie", true, "Whether or not to inject a list of domains")
 	flag.StringVar(injectlistLocation, "il", "./inject.txt", "URL or file containing a list of domains to inject")
+    flag.BoolVar(prometheusBool, "pb", true, "Whether or not to run a prometheus client and http server")
+    flag.StringVar(prometheusHttpsPort, "pp", "8080", "The port for the prometheus http server to serve on")
 
 	flag.Parse()
+
+    if *prometheusBool {
+        go startPrometheus(prometheusStats)
+    }
 
 	switch *upstreamNet {
 	case "udp", "tcp", "tcp-tls":
@@ -164,6 +177,12 @@ func main() {
 }
 
 func handleRequest(w dns.ResponseWriter, request *dns.Msg) {
+    go func() {
+        if *prometheusBool {
+            prometheusStats["total_queries"].Inc()
+        }
+    }()
+
 	request.Question[0].Name = strings.ToLower(request.Question[0].Name)
 
     c.RLock()
