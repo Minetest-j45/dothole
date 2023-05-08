@@ -140,17 +140,7 @@ func main() {
 		}
 	}()
 
-	certPEMBlock, err := os.ReadFile("cert.pem")
-	if err != nil {
-		log.Fatal("error parsing public key, `cert.pem`", err)
-	}
-
-	keyPEMBlock, err := os.ReadFile("key.pem")
-	if err != nil {
-		log.Fatal("error parsing private key, `key.pem`", err)
-	}
-
-	cert, err := tls.X509KeyPair(certPEMBlock, keyPEMBlock)
+	cert, err := tls.LoadX509KeyPair("cert.pem", "key.pem")
 	if err != nil {
 		log.Fatal(err)
 	}
