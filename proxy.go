@@ -3,16 +3,13 @@ package main
 import (
 	"bufio"
 	"crypto/tls"
-	"errors"
 	"flag"
-	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/miekg/dns"
@@ -23,10 +20,7 @@ import (
 var client *dns.Client
 var c cache
 var list map[string]string
-var clientConn *dns.Conn
-var upstreamAddr *string
 
-var prometheusBool *bool
 var prometheusStats = make(map[string]prometheus.Counter)
 
 type cacheEntry struct {
@@ -40,6 +34,16 @@ type cacheEntry struct {
 type cache struct {
 	sync.RWMutex
 	entries map[dns.Question]cacheEntry
+}
+
+var connPool = &sync.Pool{
+	New: func() interface{} {
+		conn, err := client.Dial(*upstreamAddr)
+		if err != nil {
+			log.Fatalf("Failed to dial upstream server: %v", err)
+		}
+		return conn
+	},
 }
 
 const cacheValidTime time.Duration = 300 * time.Second
@@ -91,9 +95,9 @@ var (
 func main() {
 	flag.Parse()
 
-    if *prometheusBool {
-        go startPrometheus(prometheusStats)
-    }
+	if *prometheusBool {
+		go startPrometheus(prometheusStats)
+	}
 
 	switch *upstreamNet {
 	case "udp", "tcp", "tcp-tls":
@@ -152,7 +156,7 @@ func main() {
 
 	dns.HandleFunc(".", handleRequest)
 	client = &dns.Client{Net: *upstreamNet, TLSConfig: tlsConf}
-	clientConn, err = client.Dial(*upstreamAddr)
+
 	if err != nil {
 		log.Fatal("error connecting to upstream server:", err)
 	}
@@ -167,67 +171,55 @@ func main() {
 }
 
 func handleRequest(w dns.ResponseWriter, request *dns.Msg) {
-    go func() {
-        if *prometheusBool {
-            prometheusStats["total_queries"].Inc()
-        }
-    }()
+	go func() {
+		if *prometheusBool {
+			prometheusStats["total_queries"].Inc()
+		}
+	}()
 
 	request.Question[0].Name = strings.ToLower(request.Question[0].Name)
 
-    c.RLock()
-    entry, ok := c.entries[request.Question[0]]
-    c.RUnlock()
+	c.RLock()
+	entry, ok := c.entries[request.Question[0]]
+	c.RUnlock()
 
-    if ok && time.Since(entry.t) < cacheValidTime { //check if cache entry is still valid
-        log.Println("replying to", request.Question[0], "with cache:", entry)
-        reply := new(dns.Msg)
-        reply.SetReply(request)
-        reply.Compress = entry.compress
-        reply.Answer = entry.answer
-        reply.MsgHdr.RecursionAvailable = entry.ra
-        w.WriteMsg(reply)
-        return
-    }
+	if ok && time.Since(entry.t) < cacheValidTime { //check if cache entry is still valid
+		log.Println("replying to", request.Question[0], "with cache:", entry)
+		reply := new(dns.Msg)
+		reply.SetReply(request)
+		reply.Compress = entry.compress
+		reply.Answer = entry.answer
+		reply.MsgHdr.RecursionAvailable = entry.ra
+		w.WriteMsg(reply)
+		return
+	}
 
-    if list != nil && request.Question[0].Qtype == dns.TypeA {
-        if block, ok := list[request.Question[0].Name]; ok { //check blocklist for the question
-            log.Println("blocked/injected:", request.Question[0].Name, "to:", block)
-            reply := new(dns.Msg)
-            reply.SetReply(request)
-            reply.Answer = append(reply.Answer, &dns.A{
-                Hdr: dns.RR_Header{
-                    Name:   request.Question[0].Name,
-                    Rrtype: dns.TypeA,
-                    Class:  dns.ClassINET,
-                    Ttl:    0,
-                },
-                A: net.ParseIP(block),
-            })
-            reply.MsgHdr.RecursionAvailable = true
-            w.WriteMsg(reply)
-            return
-        }
-    }
-
-
-RETRY:
-	reply, _, err := client.ExchangeWithConn(request, clientConn)
-	if err != nil {
-		switch {
-		case
-			errors.Is(err, net.ErrClosed),
-			errors.Is(err, io.EOF),
-			errors.Is(err, syscall.EPIPE):
-			log.Println("reopenning connection after closed:", err)
-			clientConn, err = client.Dial(*upstreamAddr)
-			if err != nil {
-				log.Fatal("error reconnecting to upstream server:", err)
-			}
-			goto RETRY
-		default:
-			log.Println("unable to process error:", err)
+	if list != nil && request.Question[0].Qtype == dns.TypeA {
+		if block, ok := list[request.Question[0].Name]; ok { //check blocklist for the question
+			log.Println("blocked/injected:", request.Question[0].Name, "to:", block)
+			reply := new(dns.Msg)
+			reply.SetReply(request)
+			reply.Answer = append(reply.Answer, &dns.A{
+				Hdr: dns.RR_Header{
+					Name:   request.Question[0].Name,
+					Rrtype: dns.TypeA,
+					Class:  dns.ClassINET,
+					Ttl:    0,
+				},
+				A: net.ParseIP(block),
+			})
+			reply.MsgHdr.RecursionAvailable = true
+			w.WriteMsg(reply)
+			return
 		}
+	}
+
+	conn := connPool.Get().(*dns.Conn)
+	defer connPool.Put(conn)
+
+	reply, _, err := client.ExchangeWithConn(request, conn)
+	if err != nil {
+		log.Println("error exchanging message with upstream:", err)
 		return
 	}
 
@@ -235,5 +227,5 @@ RETRY:
 	c.entries[reply.Question[0]] = cacheEntry{reply.Compress, reply.Question[0], reply.Answer /*recursive answers possible (e.g. with CNAME records)*/, reply.RecursionAvailable, time.Now()}
 	c.Unlock()
 
-    w.WriteMsg(reply)
+	w.WriteMsg(reply)
 }
