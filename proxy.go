@@ -75,30 +75,20 @@ func loadList(list map[string]string, location string) {
 	}
 }
 
+var (
+	upstreamNet        = flag.String("un", "tcp-tls", "Type of upstream network connection to use (udp, tcp, tcp-tls)")
+	upstreamAddr       = flag.String("ua", "208.67.220.220:853", "Upstream DNS server address to use (ipaddr:port)")
+	localNet           = flag.String("ln", "tcp-tls", "Type of local network connection to use (udp, tcp, tcp-tls)")
+	localPort          = flag.String("lp", "853", "Local port to listen on")
+	blocklistBool      = flag.Bool("be", true, "Whether to use a blocklist")
+	blocklistLocation  = flag.String("bl", "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts", "URL or file containing a list of domains to block")
+	injectlistBool     = flag.Bool("ie", true, "Whether or not to inject a list of domains")
+	injectlistLocation = flag.String("il", "./inject.txt", "URL or file containing a list of domains to inject")
+	prometheusBool     = flag.Bool("pb", true, "Whether to run a prometheus client and http server")
+	//prometheusHttpsPort = flag.String("pp", "8080", "The port for the prometheus http server to serve on")
+)
+
 func main() {
-    upstreamNet := flag.String("upstream-net", "tcp-tls", "Type of upstream network connection to use (udp, tcp, tcp-tls)")
-	upstreamAddr = flag.String("upstream-addr", "208.67.220.220:853", "Upstream DNS server address to use (ipaddr:port)")
-	localNet := flag.String("local-net", "tcp-tls", "Type of local network connection to use (udp, tcp, tcp-tls)")
-	localPort := flag.String("local-port", "853", "Local port to listen on")
-	blocklistBool := flag.Bool("blocklist-enabled", true, "Whether or not to use a blocklist")
-	blocklistLocation := flag.String("blocklist-location", "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts", "URL or file containing a list of domains to block")
-	injectlistBool := flag.Bool("injectlist-enabled", true, "Whether or not to inject a list of domains")
-	injectlistLocation := flag.String("injectlist-location", "./inject.txt", "URL or file containing a list of domains to inject")
-    prometheusBool = flag.Bool("prometheus", true, "Whether or not to run a prometheus client and http server")
-    prometheusHttpsPort := flag.String("prometheus-port", "8080", "The port for the prometheus http server to serve on")
-
-	// shortcuts
-	flag.StringVar(upstreamNet, "un", "tcp-tls", "Type of upstream network connection to use (udp, tcp, tcp-tls)")
-	flag.StringVar(upstreamAddr, "ua", "8.8.8.8:853", "Upstream DNS server address to use (ipaddr:port)")
-	flag.StringVar(localNet, "ln", "tcp-tls", "Type of local network connection to use (udp, tcp, tcp-tls)")
-	flag.StringVar(localPort, "lp", "853", "Local port to listen on")
-	flag.BoolVar(blocklistBool, "be", true, "Whether or not to use a blocklist")
-	flag.StringVar(blocklistLocation, "bl", "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts", "URL or file containing a list of domains to block")
-	flag.BoolVar(injectlistBool, "ie", true, "Whether or not to inject a list of domains")
-	flag.StringVar(injectlistLocation, "il", "./inject.txt", "URL or file containing a list of domains to inject")
-    flag.BoolVar(prometheusBool, "pb", true, "Whether or not to run a prometheus client and http server")
-    flag.StringVar(prometheusHttpsPort, "pp", "8080", "The port for the prometheus http server to serve on")
-
 	flag.Parse()
 
     if *prometheusBool {
