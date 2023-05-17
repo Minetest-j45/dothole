@@ -3,13 +3,16 @@ package main
 import (
 	"bufio"
 	"crypto/tls"
+	"errors"
 	"flag"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/miekg/dns"
@@ -20,6 +23,7 @@ import (
 var client *dns.Client
 var c cache
 var list map[string]string
+var clientConn *dns.Conn
 
 var prometheusStats = make(map[string]prometheus.Counter)
 
@@ -34,16 +38,6 @@ type cacheEntry struct {
 type cache struct {
 	sync.RWMutex
 	entries map[dns.Question]cacheEntry
-}
-
-var connPool = &sync.Pool{
-	New: func() interface{} {
-		conn, err := client.Dial(*upstreamAddr)
-		if err != nil {
-			log.Fatalf("Failed to dial upstream server: %v", err)
-		}
-		return conn
-	},
 }
 
 const cacheValidTime time.Duration = 300 * time.Second
@@ -156,7 +150,7 @@ func main() {
 
 	dns.HandleFunc(".", handleRequest)
 	client = &dns.Client{Net: *upstreamNet, TLSConfig: tlsConf}
-
+	clientConn, err = client.Dial(*upstreamAddr)
 	if err != nil {
 		log.Fatal("error connecting to upstream server:", err)
 	}
@@ -214,12 +208,23 @@ func handleRequest(w dns.ResponseWriter, request *dns.Msg) {
 		}
 	}
 
-	conn := connPool.Get().(*dns.Conn)
-	defer connPool.Put(conn)
-
-	reply, _, err := client.ExchangeWithConn(request, conn)
+RETRY:
+	reply, _, err := client.ExchangeWithConn(request, clientConn)
 	if err != nil {
-		log.Println("error exchanging message with upstream:", err)
+		switch {
+		case
+			errors.Is(err, net.ErrClosed),
+			errors.Is(err, io.EOF),
+			errors.Is(err, syscall.EPIPE):
+			log.Println("reopenning connection after closed:", err)
+			clientConn, err = client.Dial(*upstreamAddr)
+			if err != nil {
+				log.Fatal("error reconnecting to upstream server:", err)
+			}
+			goto RETRY
+		default:
+			log.Println("unable to process error:", err)
+		}
 		return
 	}
 
